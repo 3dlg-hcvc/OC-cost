@@ -2,15 +2,18 @@ import numpy as np
 from .optimization import OCOpt
 from .Annotations import BBox, predBBox, Annotations
 import pulp
+from scipy.spatial import Delaunay
 
 
 class OC_Cost3D:
-    def __init__(self, lm=1, iou_mode=False):
+    def __init__(self, lm=1, iou_mode=False, giou_bb_mode=False, giou_ch_mode=False):
         self.lm = lm
-        if not iou_mode:
-            self.mode = "giou"
         if iou_mode:
             self.mode = "iou"
+        elif giou_bb_mode:
+            self.mode = "giou_bb"
+        elif giou_ch_mode:
+            self.mode = "giou_ch"
 
     def getIntersectUnion(self, gt_mask, pred_mask):
         gt_mask_count = np.count_nonzero(gt_mask["mask"] == 1)
@@ -29,21 +32,33 @@ class OC_Cost3D:
         return iou
 
     def getGIOU(self, gt_mask, pred_mask):
-        union_mask = gt_mask["mask"] | pred_mask["mask"]
-        min_xyz, max_xyz = np.min(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.max(gt_mask["xyz"][gt_mask["mask"]], axis=0)
-        c_mask = [int(np.all((min_xyz <= point) & (point <= max_xyz), axis=0)) for point in gt_mask["xyz"]]
+        if self.mode == "giou_bb":
+            union_mask = gt_mask["mask"] | pred_mask["mask"]
+            min_xyz, max_xyz = np.min(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.max(gt_mask["xyz"][gt_mask["mask"]], axis=0)
+            c_mask = [int(np.all((min_xyz <= point) & (point <= max_xyz), axis=0)) for point in gt_mask["xyz"]]
 
-        iou = self.getIOU(gt_mask, pred_mask)
+            iou = self.getIOU(gt_mask, pred_mask)
 
-        Giou = iou - np.count_nonzero(c_mask & ~union_mask) / np.count_nonzero(c_mask)
-        return Giou
+            Giou = iou - np.count_nonzero(c_mask & ~union_mask) / np.count_nonzero(c_mask)
+            return Giou
+        else:
+            union_mask = gt_mask["mask"] | pred_mask["mask"]
+            union_xyz = gt_mask["xyz"][union_mask]
+            triangulation = Delaunay(union_xyz)
+            c_mask = triangulation.find_simplex(gt_mask["xyz"]) >= 0
+            iou = self.getIOU(gt_mask, pred_mask)
+
+            Giou = iou - np.count_nonzero(c_mask & ~union_mask) / np.count_nonzero(c_mask)
+            return Giou
+
 
     def getCloc(self, gt_mask, pred_mask):
         cost: float = 0
-        if self.mode == "giou":
-            cost = (1 - self.getGIOU(gt_mask, pred_mask)) / 2
         if self.mode == "iou":
             cost = (1 - self.getIOU(gt_mask, pred_mask)) / 2
+        else:
+            cost = (1 - self.getGIOU(gt_mask, pred_mask)) / 2
+        
         return cost
 
     def getCcls(self, gt_mask, pred_mask):

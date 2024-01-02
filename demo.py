@@ -26,6 +26,12 @@ if __name__ == "__main__":
     parser.add_argument(
         '--iou_mode', help="turn on iou mode", action='store_true'
     )
+    parser.add_argument(
+        '--giou_bb_mode', help="turn on giou bounding box mode", action='store_true'
+    )
+    parser.add_argument(
+        '--giou_ch_mode', help="turn on giou convex hull mode", action='store_true'
+    )
 
     args = parser.parse_args()
 
@@ -66,7 +72,7 @@ if __name__ == "__main__":
         
         gt = {"gt_labels": gt_semantic_instance_labels, "masks": gt_instance_masks, "xyz": gt_data["xyz"]}
 
-        occost = OC_Cost3D(float(args.lam), args.iou_mode)
+        occost = OC_Cost3D(float(args.lam), args.iou_mode, args.giou_bb_mode, args.giou_ch_mode)
     
         c_matrix = occost.build_C_matrix(gt, preds)
         pi_tilde_matrix = occost.optim(float(args.beta))
