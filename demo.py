@@ -1,10 +1,12 @@
 import numpy as np
-from oc_cost.Annotations import Annotation_images, Prediction_images
-from oc_cost.oc_cost import OC_Cost
+from oc_cost3d.oc_cost import OC_Cost3D
 from tqdm import tqdm
 import json
 import argparse
 import math
+import glob
+import os
+import torch
 
 if __name__ == "__main__":
 
@@ -12,9 +14,9 @@ if __name__ == "__main__":
         description='calculate OC cost')
 
     parser.add_argument(
-        '-pd', '--pred', help='pred json')
+        '-exp', '--experiment_name', help='experiment name', type=str)
     parser.add_argument(
-        '-gt', '--truth', help='ground truth json')
+        '-gt', '--truth', help='minsu3d gt directory', type=str, default="../minsu3d/data/partnetsim/val")
     parser.add_argument(
         '-lm', '--lam', help='Lambda parameter', default=1
     )
@@ -27,28 +29,51 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    pred_path = args.pred
-    truth_path = args.truth
+    experiment_name = args.experiment_name
+    pred_path = f"../minsu3d/output/PartNetSim/PointGroup/{experiment_name}/inference/val/predictions/instance"
 
-    preds: Prediction_images = Prediction_images()
-    truth: Annotation_images = Annotation_images()
-    occost = OC_Cost(float(args.lam), args.iou_mode)
+    gt_path = args.truth
+    model_ids = [path.split('/')[-1].split('.')[0] for path in glob.glob(f"{pred_path}/*.txt")]
     total_occost = 0
-    with open(pred_path) as f:
-        pd_dict = json.load(f)
-        preds.load_from_dict(pd_dict)
 
-    with open(truth_path) as f:
-        gt_dict = json.load(f)
-        truth.load_from_dict(gt_dict)
+    for model_id in tqdm(model_ids):
+        with open(f"{pred_path}/{model_id}.txt") as file:
+            lines = file.readlines()
+            lines = [line.rstrip() for line in lines]
+        instanceFileNames = []
+        labelIndexes = []
+        confidenceScores = []
+        predicted_mask_list = []
+        for i in lines:
+            splitedLine = i.split()
+            instanceFileNames.append(os.path.join(pred_path, splitedLine[0]))
+            labelIndexes.append(splitedLine[1])
+            confidenceScores.append(float(splitedLine[2]))
 
-    for image_name in tqdm(truth.keys()):
-        c_matrix = occost.build_C_matrix(truth[image_name], preds[image_name])
+        for instanceFileName in instanceFileNames:
+            predicted_mask_list.append(np.loadtxt(instanceFileName, dtype=bool))
+        
+        preds = {"pred_labels": labelIndexes, "conf": confidenceScores, "masks": predicted_mask_list}
+
+        gt_data = torch.load(f"{gt_path}/{model_id}.pth")
+        gt_instance_ids =  gt_data["instance_ids"]
+        gt_semantic_instance_labels = []
+        gt_instance_masks = []
+        for instance_id in np.unique(gt_instance_ids):
+            instance_mask = gt_data["instance_ids"] == instance_id
+            gt_instance_masks.append(instance_mask)
+            gt_semantic_instance_labels.append(np.where(gt_data["instance_ids"] == instance_id)[0])
+        
+        gt = {"gt_labels": gt_semantic_instance_labels, "masks": gt_instance_masks}
+
+        occost = OC_Cost3D(float(args.lam), args.iou_mode)
+    
+        c_matrix = occost.build_C_matrix(gt, preds)
         pi_tilde_matrix = occost.optim(float(args.beta))
         cost = np.sum(np.multiply(pi_tilde_matrix, occost.opt.cost))
         if math.isnan(cost):
             cost = 0
         total_occost += cost
 
-    oc_cost = total_occost / len(truth.keys())
+    oc_cost = total_occost / len(model_ids)
     print(oc_cost)
