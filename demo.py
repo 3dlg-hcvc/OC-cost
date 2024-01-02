@@ -64,7 +64,7 @@ if __name__ == "__main__":
             gt_instance_masks.append(instance_mask)
             gt_semantic_instance_labels.append(np.where(gt_data["instance_ids"] == instance_id)[0])
         
-        gt = {"gt_labels": gt_semantic_instance_labels, "masks": gt_instance_masks}
+        gt = {"gt_labels": gt_semantic_instance_labels, "masks": gt_instance_masks, "xyz": gt_data["xyz"]}
 
         occost = OC_Cost3D(float(args.lam), args.iou_mode)
     

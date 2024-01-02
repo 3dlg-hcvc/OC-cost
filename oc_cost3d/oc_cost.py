@@ -29,16 +29,14 @@ class OC_Cost3D:
         return iou
 
     def getGIOU(self, gt_mask, pred_mask):
-        """c_area = ((self.__max_x2 - self.__min_x1 + 1) *
-                  (self.__max_y2 - self.__min_y1 + 1))
+        union_mask = gt_mask["mask"] | pred_mask["mask"]
+        min_xyz, max_xyz = np.min(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.max(gt_mask["xyz"][gt_mask["mask"]], axis=0)
+        c_mask = [int(np.all((min_xyz <= point) & (point <= max_xyz), axis=0)) for point in gt_mask["xyz"]]
 
-        intersect, union = self.getIntersectUnion(gt_mask, pred_mask)
+        iou = self.getIOU(gt_mask, pred_mask)
 
-        iou = intersect / (union)
-        Giou = iou - ((c_area - union) / c_area)
-
-        return Giou"""
-        pass
+        Giou = iou - np.count_nonzero(c_mask & ~union_mask) / np.count_nonzero(c_mask)
+        return Giou
 
     def getCloc(self, gt_mask, pred_mask):
         cost: float = 0
@@ -74,7 +72,7 @@ class OC_Cost3D:
 
         for i in range(m):
             for j in range(n):
-                gt_mask = {"mask": gt["masks"][j], "label": gt["gt_labels"][j]}
+                gt_mask = {"mask": gt["masks"][j], "label": gt["gt_labels"][j], "xyz": gt["xyz"]}
                 pred_mask = {"mask": preds["masks"][i], "label": preds["pred_labels"][i], "conf": preds["conf"][i]}
                 self.cost[i][j] = self.getoneCost(gt_mask, pred_mask)
         return self.cost
