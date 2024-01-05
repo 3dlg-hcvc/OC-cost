@@ -2,7 +2,8 @@ import numpy as np
 from .optimization import OCOpt
 from .Annotations import BBox, predBBox, Annotations
 import pulp
-from scipy.spatial import Delaunay
+from scipy.spatial import ConvexHull, HalfspaceIntersection, Delaunay
+from scipy.optimize import linprog
 
 
 class OC_Cost3D:
@@ -14,15 +15,39 @@ class OC_Cost3D:
             self.mode = "giou_bb"
         elif giou_ch_mode:
             self.mode = "giou_ch"
+        self.mask_labels = []
 
     def getIntersectUnion(self, gt_mask, pred_mask):
-        gt_mask_count = np.count_nonzero(gt_mask["mask"] == 1)
-        pred_mask_count = np.count_nonzero(pred_mask["mask"] == 1)
+        if self.mode == "giou_bb" or self.mode == "iou":
+            # https://pbr-book.org/3ed-2018/Geometry_and_Transformations/Bounding_Boxes#:~:text=The%20intersection%20of%20two%20bounding,Intersection%20of%20Two%20Bounding%20Boxes.
+            max_min = np.maximum(np.min(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.min(pred_mask["xyz"][pred_mask["mask"]], axis=0))
+            min_max = np.minimum(np.max(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.max(pred_mask["xyz"][pred_mask["mask"]], axis=0))
 
-        intersection = np.count_nonzero(np.logical_and(gt_mask["mask"] == 1, pred_mask["mask"] == 1))
-        union = gt_mask_count + pred_mask_count - intersection
+            intersection_dims = np.maximum(0, min_max - max_min)
+            intersection_volume = np.prod(intersection_dims)
 
-        return intersection, union
+            gt_volume = np.prod(np.max(gt_mask["xyz"][gt_mask["mask"]], axis=0) - np.min(gt_mask["xyz"][gt_mask["mask"]], axis=0))
+            pred_volume = np.prod(np.max(pred_mask["xyz"][pred_mask["mask"]], axis=0) - np.min(pred_mask["xyz"][pred_mask["mask"]], axis=0))
+            union_volume = gt_volume + pred_volume - intersection_volume
+        if self.mode == "giou_ch":
+            gt_hull = ConvexHull(gt_mask["xyz"][gt_mask["mask"]])
+            pred_hull = ConvexHull(pred_mask["xyz"][pred_mask["mask"]])
+            
+            # adapted from https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.HalfspaceIntersection.html#scipy.spatial.HalfspaceIntersection
+            halfspaces = np.vstack([gt_hull.equations, pred_hull.equations])
+            norm_vector = np.reshape(np.linalg.norm(halfspaces[:, :-1], axis=1), (halfspaces.shape[0], 1))
+            c = np.zeros((halfspaces.shape[1],))
+            c[-1] = -1
+            A = np.hstack((halfspaces[:, :-1], norm_vector))
+            b = - halfspaces[:, -1:]
+            res = linprog(c, A_ub=A, b_ub=b, bounds=(None, None))
+            feasible_point = res.x[:-1]
+            intersection = HalfspaceIntersection(halfspaces, feasible_point)
+            intersection_volume = ConvexHull(intersection.intersections).volume
+
+            union_volume = gt_hull.volume + pred_hull.volume - intersection_volume
+        
+        return intersection_volume, union_volume
 
     def getIOU(self, gt_mask, pred_mask):
 
@@ -32,25 +57,22 @@ class OC_Cost3D:
         return iou
 
     def getGIOU(self, gt_mask, pred_mask):
+        intersect, union = self.getIntersectUnion(gt_mask, pred_mask)
+        iou = intersect / union
+
         if self.mode == "giou_bb":
-            union_mask = gt_mask["mask"] | pred_mask["mask"]
-            min_xyz, max_xyz = np.min(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.max(gt_mask["xyz"][gt_mask["mask"]], axis=0)
-            c_mask = [int(np.all((min_xyz <= point) & (point <= max_xyz), axis=0)) for point in gt_mask["xyz"]]
-
-            iou = self.getIOU(gt_mask, pred_mask)
-
-            Giou = iou - np.count_nonzero(c_mask & ~union_mask) / np.count_nonzero(c_mask)
-            return Giou
+            min = np.minimum(np.min(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.min(pred_mask["xyz"][pred_mask["mask"]], axis=0))
+            max = np.maximum(np.max(gt_mask["xyz"][gt_mask["mask"]], axis=0), np.max(pred_mask["xyz"][pred_mask["mask"]], axis=0))
+            
+            min_enclosing_bbox_dims = max - min
+            c_volume = np.prod(min_enclosing_bbox_dims)
         else:
-            union_mask = gt_mask["mask"] | pred_mask["mask"]
-            union_xyz = gt_mask["xyz"][union_mask]
-            triangulation = Delaunay(union_xyz)
-            c_mask = triangulation.find_simplex(gt_mask["xyz"]) >= 0
-            iou = self.getIOU(gt_mask, pred_mask)
-
-            Giou = iou - np.count_nonzero(c_mask & ~union_mask) / np.count_nonzero(c_mask)
-            return Giou
-
+            all_points = np.concatenate((gt_mask["xyz"][gt_mask["mask"]], pred_mask["xyz"][pred_mask["mask"]]))
+            min_eclosing_hull = ConvexHull(all_points)
+            c_volume = min_eclosing_hull.volume
+        
+        giou = iou - (c_volume - union) / c_volume
+        return giou
 
     def getCloc(self, gt_mask, pred_mask):
         cost: float = 0
@@ -88,7 +110,7 @@ class OC_Cost3D:
         for i in range(m):
             for j in range(n):
                 gt_mask = {"mask": gt["masks"][j], "label": gt["gt_labels"][j], "xyz": gt["xyz"]}
-                pred_mask = {"mask": preds["masks"][i], "label": preds["pred_labels"][i], "conf": preds["conf"][i]}
+                pred_mask = {"mask": preds["masks"][i], "label": preds["pred_labels"][i], "conf": preds["conf"][i], "xyz": gt["xyz"]}
                 self.cost[i][j] = self.getoneCost(gt_mask, pred_mask)
         return self.cost
 

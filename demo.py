@@ -1,5 +1,5 @@
 import numpy as np
-from oc_cost3d.oc_cost import OC_Cost3D
+from oc_cost3d import OC_Cost3D
 from tqdm import tqdm
 import json
 import argparse
@@ -32,8 +32,30 @@ if __name__ == "__main__":
     parser.add_argument(
         '--giou_ch_mode', help="turn on giou convex hull mode", action='store_true'
     )
+    parser.add_argument(
+        '--sm', help="single model", type=str, default=None
+    )
+    parser.add_argument(
+        '--save_metric', help="save metric to the folder", action='store_true'
+    )
 
     args = parser.parse_args()
+
+
+    iou_type = None
+    if args.iou_mode:
+        iou_type = "iou"
+    elif args.giou_bb_mode:
+        iou_type = "giou_bb"
+    elif args.giou_ch_mode:
+        iou_type = "giou_ch"
+    else:
+        raise Exception("IoU type not specified, choose one among: --iou_mode, --giou_bb_mode, --giou_ch_mode")
+
+    save_folder = None
+    if args.save_metric:
+        save_folder = f"./metric_results/{args.experiment_name}/{iou_type}"
+        os.makedirs(f"{save_folder}", exist_ok=True)
 
     experiment_name = args.experiment_name
     pred_path = f"../minsu3d/output/PartNetSim/PointGroup/{experiment_name}/inference/val/predictions/instance"
@@ -41,6 +63,12 @@ if __name__ == "__main__":
     gt_path = args.truth
     model_ids = [path.split('/')[-1].split('.')[0] for path in glob.glob(f"{pred_path}/*.txt")]
     total_occost = 0
+
+    if args.sm:
+        model_ids = [args.sm]
+
+    per_part_cost = {"drawer": 0.0, "door": 0.0, "lid": 0.0, "base": 0.0}
+    per_part_count = {"drawer": 0.0, "door": 0.0, "lid": 0.0, "base": 0.0}
 
     for model_id in tqdm(model_ids):
         with open(f"{pred_path}/{model_id}.txt") as file:
@@ -81,5 +109,13 @@ if __name__ == "__main__":
             cost = 0
         total_occost += cost
 
+        if args.save_metric:
+            with open(f"{save_folder}/{model_id}.txt", "w+") as f:
+                f.write(f"{cost}")
+
+
     oc_cost = total_occost / len(model_ids)
-    print(oc_cost)
+    if args.save_metric and not args.sm:
+        with open(f"{save_folder}/average.txt", "w+") as f:
+            f.write(f"{oc_cost}")
+    print("OC-cost: ", oc_cost)
