@@ -1,12 +1,13 @@
+import argparse
+import glob
+import json
+import math
+import os
+
 import numpy as np
+import torch
 from oc_cost3d import OC_Cost3D
 from tqdm import tqdm
-import json
-import argparse
-import math
-import glob
-import os
-import torch
 
 if __name__ == "__main__":
 
@@ -15,6 +16,9 @@ if __name__ == "__main__":
 
     parser.add_argument(
         '-exp', '--experiment_name', help='experiment name', type=str)
+    parser.add_argument(
+        '--exp_dir', help='experiment directory', type=str, default=None
+    )
     parser.add_argument(
         '-gt', '--truth', help='minsu3d gt directory', type=str, default="../minsu3d/data/partnetsim/val")
     parser.add_argument(
@@ -57,8 +61,12 @@ if __name__ == "__main__":
         save_folder = f"./metric_results/{args.experiment_name}/{iou_type}"
         os.makedirs(f"{save_folder}", exist_ok=True)
 
-    experiment_name = args.experiment_name
-    pred_path = f"../minsu3d/output/PartNetSim/PointGroup/{experiment_name}/inference/val/predictions/instance"
+    if not args.exp_dir:
+        experiment_name = args.experiment_name
+        pred_path = f"../minsu3d/output/PartNetSim/PointGroup/{experiment_name}/inference/val/predictions/instance"
+    else:
+        pred_path = f"{args.exp_dir}/inference/val/predictions/instance"
+        experiment_name = args.exp_dir.split("/")[-5]
 
     gt_path = args.truth
     model_ids = [path.split('/')[-1].split('.')[0] for path in glob.glob(f"{pred_path}/*.txt")]
